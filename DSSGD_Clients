@@ -1,0 +1,128 @@
+############################################################################
+#######客户端，根据从参数服务器接收的参数训练模型，然后返回根据本地训练集训练出来的参数
+############################################################################
+#-*- coding: utf-8 -*-
+from socket import *
+from time import ctime
+from time import localtime
+import time
+import threading
+import traceback
+import pickle
+#导入私有模板
+import simple_network
+import mnist_loader
+import importlib
+importlib.reload(simple_network)
+importlib.reload(mnist_loader)
+
+def new_server(port, trainingdata_num):
+    #初始化神经网络
+    net = simple_network.SimNetwork([784,30,10])    
+    #初始化sock
+    host_server = '127.0.0.1'
+    BUFSIZ=4096
+    ADDR=(host_server, port)
+    sock=socket(AF_INET, SOCK_STREAM)
+    sock.bind(ADDR)
+    sock.listen(5)
+    sock.settimeout(50)
+
+    #设置退出条件
+    STOP_CHAT=False
+    while not STOP_CHAT:
+        print("%s正在侦听" %(str(ADDR)))
+        data_all = b""
+        #获取客户端地址及Sock
+        tcpClientSock, addr = sock.accept()
+        while True:
+            try:
+                #接收客户端的数据
+                data = tcpClientSock.recv(BUFSIZ)
+                #如果接收的数据为空，则表示完成一次send
+                if not data: 
+                    print("%s收到%s的全部数据,等待下次侦听" %(ADDR, addr))
+                    break          
+                #因为传送数据远大于bufsize，需要分割为多个数据包传过来
+                data_all += data        
+                continue           
+            except:
+                print('-----err-----')
+                traceback.print_exc()
+                break
+        #如果发送的数据是quit符号，则结束侦听
+        if pickle.loads(data_all) == 'quit':
+            print("%s收到quit指令，退出侦听" %str(ADDR))
+            STOP_CHAT = True
+            break
+        else:       
+            #使用服务器接收来的模型参数更新本地模型
+            data_all_upickle = pickle.loads(data_all)
+            net.biases = data_all_upickle[0]
+            net.weights = data_all_upickle[1]    
+            #训练模型获得梯度信息
+            new_biases, new_weights = net.computer_w_b(trainingdata_num)
+    
+            #发送梯度信息至参数服务器
+            trans_lists = []
+            trans_lists.append(new_biases)
+            trans_lists.append(new_weights)
+            trans_lists_pickle = pickle.dumps(trans_lists)
+            data_send = trans_lists_pickle          
+            print("%s发送返回数据" %str(ADDR))
+            create_new_client(port+100, data_send)
+            print("%s发送quit指令" %str(ADDR))
+            create_new_client(port+100, pickle.dumps('quit')) 
+            
+    tcpClientSock.close()
+    sock.close()
+    print('关闭当前链接',str(ADDR))
+
+    
+def create_new_client(port,data_send):
+    try:
+        ADDR2 = ('127.0.0.1',port)
+        sock2 = socket(AF_INET, SOCK_STREAM)
+        sock2.connect(ADDR2)
+        
+        #发送数据
+        sock2.send(data_send)
+        #time.sleep(1)
+    except:
+        #出错时退出
+        traceback.print_exc()
+        quit()
+
+if __name__ == '__main__':           
+    
+    #加载训练集、验证集和测试集
+    training_data, validation_data, test_data = mnist_loader.load_data_wrapper()
+    #将数据集分为5份，每个客户端保存训练集的一个子集
+    training_data0 = training_data[0:10000]
+    training_data1 = training_data[10000:20000]
+    training_data2 = training_data[20000:30000]
+    training_data3 = training_data[30000:40000]
+    training_data4 = training_data[40000:50000]
+    
+    #创建多线程
+    threads = []  
+    thr1 = threading.Thread(target=new_server,args=(1100,training_data0))  
+    threads.append(thr1)
+    thr2 = threading.Thread(target=new_server,args=(1101,training_data1))  
+    threads.append(thr2)
+    thr3 = threading.Thread(target=new_server,args=(1102,training_data2))  
+    threads.append(thr3)
+    thr4 = threading.Thread(target=new_server,args=(1103,training_data3))  
+    threads.append(thr4)
+    thr5 = threading.Thread(target=new_server,args=(1104,training_data4))  
+    threads.append(thr5)
+    
+    for thr in threads:  
+        #setDaemon将主线程设置为守护线程，主线程执行结束时子线程无论是否完成一并退出
+        thr.setDaemon(True)  
+        thr.start() 
+        #time.sleep(0.1)
+        
+    #join方法的作用是阻塞主进程（挡住，无法执行join以后的语句），专注执行多线程。
+    for t in threads:  
+        t.join()
