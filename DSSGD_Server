@@ -1,0 +1,119 @@
+###########################################################################
+#######参数服务器，实现向客户端发送参数和更新来自客户端的参数
+###########################################################################
+#-*- coding: utf-8 -*-
+from socket import *
+import importlib
+importlib.reload(simple_network)
+import traceback
+import json
+import pickle
+import time
+import datetime
+#导入私有模板
+import simple_network
+import mnist_loader
+import importlib
+importlib.reload(mnist_loader)
+importlib.reload(simple_network)
+
+#迭代次数
+epochs = 20
+#客户端个数
+num_of_servers = 5
+#socket参数
+host_server='127.0.0.1'
+port_server=1100
+BUFSIZ = 4096
+#加载训练集、验证集和测试集，mnist_loader.py中包含mnist数据集的文件地址
+training_data, validation_data, test_data = mnist_loader.load_data_wrapper()
+#初始化神经网络
+net = simple_network.SimNetwork([784,30,10])
+
+def client(net):   
+    for epoch in range(0,epochs):
+        #print("第%d次迭代" %epoch)      
+        for num in range(0,num_of_servers):
+            #print("发往第%d个服务端数据" %num)
+            #发送数据
+            trans_lists = []
+            trans_lists.append(net.biases)
+            trans_lists.append(net.weights)
+            trans_lists_pickle = pickle.dumps(trans_lists)
+            data_send = trans_lists_pickle
+            send_to_server(port_server + num, data_send)
+            create_new_server2(port_server+num+100, epoch, num)    
+    #迭代结束后发送关闭服务指令
+    for num in range(0,num_of_servers):
+        #print("发送结束第%d个服务端指令" %num)
+        send_to_server(port_server + num, pickle.dumps('quit'))
+
+def send_to_server(port,data_send):
+    try:
+        #设置sock参数
+        server_addr = ('127.0.0.1',port)
+        sock = socket(AF_INET, SOCK_STREAM)
+        sock.connect(server_addr)
+        #发送数据
+        sock.send(data_send)
+        #print("发往%s数据完毕" %str(server_addr))
+        #time.sleep(1)
+    except:
+        #出错时退出
+        traceback.print_exc()
+        quit()
+
+def create_new_server2(port, epoch, num_of_client):
+        #设置sock参数
+        ADDR2=('127.0.0.1', port)
+        sock2=socket(AF_INET, SOCK_STREAM)
+        sock2.bind(ADDR2)
+        sock2.listen(1)
+        sock2.settimeout(20)
+        #设置退出条件
+        STOP_CHAT=False
+        while not STOP_CHAT:
+            #print('%s等待接收回传数据' %str(ADDR2))
+            data_all = b""
+            #获取客户端地址及Sock
+            tcpClientSock2, addr2 = sock2.accept()
+            while True:
+                try:
+                    #接收客户端的数据
+                    data = tcpClientSock2.recv(BUFSIZ)
+                    #如果接收的数据为空，则表示完成一次send
+                    if not data: 
+                        #print("接收全部回传数据,等待下次接收。。。")
+                        break
+                    #因为传送数据远大于bufsize，需要分割为多个数据包传过来
+                    data_all += data
+                    continue
+                except:
+                    print('-----err-----')
+                    traceback2.print_exc()
+                    break
+            #如果发送的数据是quit符号，则结束侦听
+            if pickle.loads(data_all) == 'quit':
+                #print("%s收到quit指令，退出侦听" %str(ADDR2))
+                STOP_CHAT = True
+                break
+            else:       
+                #根据回传的b和w更新模型参数
+                data_all_upickle = pickle.loads(data_all)
+#                 new_b = data_all_upickle[0]
+#                 new_w = data_all_upickle[1]
+#                 net.update_w_b(new_b, new_w)
+                net.biases = data_all_upickle[0]
+                net.weights = data_all_upickle[1]
+                print("Epoch {0}, Client {1} {2} / {3}".format(epoch, num_of_client, net.evaluate(test_data), len(test_data)))
+                #print("%s接收全部回传数据,等待下次接收" %str(ADDR2))
+        tcpClientSock2.close()
+        sock2.close()
+        #print('关闭链接', ADDR2)
+
+if __name__ == '__main__':  
+    time_start = datetime.datetime.now()
+    print("Start...")
+    client(net)
+    time_end = datetime.datetime.now()
+    print("Total Time:",str(time_end - time_start))
